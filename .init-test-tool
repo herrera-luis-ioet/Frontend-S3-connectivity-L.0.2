@@ -1,0 +1,4 @@
+{
+    "command": "npm test",
+    "working_directory": "/home/kavia/workspace/Frontend-S3-connectivity-L.0.2/image-upload-app"
+}
