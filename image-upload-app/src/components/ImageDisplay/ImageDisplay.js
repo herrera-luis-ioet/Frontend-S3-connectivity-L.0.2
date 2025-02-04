@@ -30,69 +30,142 @@ import s3Service from '../../services/s3Service';
  * @param {Array<string>} props.imageUrls - Array of image URLs to display
  */
 const ImageDisplay = ({ imageUrls = [] }) => {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [images, setImages] = useState([]);
-  const [loadingStates, setLoadingStates] = useState({});
-  const [imageErrors, setImageErrors] = useState({});
-  const [selectedImage, setSelectedImage] = useState(null);
-  const [sortBy, setSortBy] = useState('date');
-  const [modalOpen, setModalOpen] = useState(false);
+  const [state, setState] = useState({
+    loading: true,
+    error: null,
+    images: [],
+    loadingStates: {},
+    imageErrors: {},
+    selectedImage: null,
+    sortBy: 'date',
+    modalOpen: false,
+    imageDimensions: {}
+  });
+
+  // Destructure state for convenience
+  const {
+    loading,
+    error,
+    images,
+    loadingStates,
+    imageErrors,
+    selectedImage,
+    sortBy,
+    modalOpen,
+    imageDimensions
+  } = state;
+
+  // Batch state updates helper
+  const batchUpdateState = useCallback((updates) => {
+    setState(prev => ({
+      ...prev,
+      ...updates
+    }));
+  }, []);
 
   const loadImages = useCallback(async () => {
     if (!imageUrls.length) {
-      setLoading(false);
+      batchUpdateState({
+        loading: false,
+        images: [],
+        loadingStates: {},
+        imageErrors: {},
+        imageDimensions: {}
+      });
       return;
     }
 
-    setLoading(true);
-    setError(null);
+    batchUpdateState({
+      loading: true,
+      error: null,
+      loadingStates: imageUrls.reduce((acc, url) => {
+        acc[url.split('/').pop()] = true;
+        return acc;
+      }, {})
+    });
 
     try {
       const loadedImages = await Promise.all(
         imageUrls.map(async (url) => {
           const fileName = url.split('/').pop();
-          setLoadingStates(prev => ({ ...prev, [fileName]: true }));
+          const newLoadingStates = { ...state.loadingStates, [fileName]: true };
+          batchUpdateState({ loadingStates: newLoadingStates });
+          
           try {
             const blob = await s3Service.getImage(fileName);
             const objectUrl = URL.createObjectURL(blob);
-            setLoadingStates(prev => ({ ...prev, [fileName]: false }));
-            setImageErrors(prev => ({ ...prev, [fileName]: null }));
+            const img = new Image();
+            
+            // Get image dimensions before creating thumbnail
+            const dimensions = await new Promise((resolve) => {
+              img.onload = () => {
+                resolve({
+                  width: img.width,
+                  height: img.height,
+                  aspectRatio: img.width / img.height
+                });
+              };
+              img.src = objectUrl;
+            });
+
+            const thumbnail = await createThumbnail(blob);
+            
+            // Update all states at once
+            const newStates = {
+              loadingStates: { ...state.loadingStates, [fileName]: false },
+              imageErrors: { ...state.imageErrors, [fileName]: null },
+              imageDimensions: { ...state.imageDimensions, [fileName]: dimensions }
+            };
+            batchUpdateState(newStates);
+
             return {
               id: fileName,
               url: objectUrl,
               name: fileName,
               size: blob.size,
               date: new Date(url.split('?')[0]).getTime() || Date.now(),
-              thumbnail: await createThumbnail(blob),
+              thumbnail,
+              dimensions
             };
           } catch (err) {
-            setImageErrors(prev => ({ ...prev, [fileName]: 'Failed to load image' }));
-            setLoadingStates(prev => ({ ...prev, [fileName]: false }));
+            batchUpdateState({
+              loadingStates: { ...state.loadingStates, [fileName]: false },
+              imageErrors: { ...state.imageErrors, [fileName]: 'Failed to load image' }
+            });
             console.error(`Error loading image ${fileName}:`, err);
             return null;
           }
         })
       );
 
-      setImages(loadedImages.filter(Boolean));
+      batchUpdateState({
+        images: loadedImages.filter(Boolean)
+      });
     } catch (err) {
-      setError('Failed to load images');
+      batchUpdateState({
+        error: 'Failed to load images'
+      });
     } finally {
-      setLoading(false);
+      batchUpdateState({
+        loading: false
+      });
     }
-  }, [imageUrls]);
+  }, [imageUrls, batchUpdateState]);
 
   useEffect(() => {
+    const controller = new AbortController();
     loadImages();
+    
+    // Cleanup function
     return () => {
-      // Cleanup object URLs
+      controller.abort();
+      // Cleanup object URLs and prevent memory leaks
       images.forEach((image) => {
-        URL.revokeObjectURL(image.url);
-        URL.revokeObjectURL(image.thumbnail);
+        if (image.url) URL.revokeObjectURL(image.url);
+        if (image.thumbnail) URL.revokeObjectURL(image.thumbnail);
       });
     };
-  }, [loadImages, images]);
+  }, [imageUrls, loadImages]); // Add imageUrls to dependencies since it's the main trigger for reloading
 
   const createThumbnail = async (blob) => {
     return new Promise((resolve) => {
@@ -129,9 +202,7 @@ const ImageDisplay = ({ imageUrls = [] }) => {
 
   const handleSort = (event) => {
     const value = event.target.value;
-    setSortBy(value);
-    
-    const sortedImages = [...images].sort((a, b) => {
+    const sortedImages = [...state.images].sort((a, b) => {
       switch (value) {
         case 'name':
           return a.name.localeCompare(b.name);
@@ -143,17 +214,24 @@ const ImageDisplay = ({ imageUrls = [] }) => {
       }
     });
     
-    setImages(sortedImages);
+    batchUpdateState({
+      sortBy: value,
+      images: sortedImages
+    });
   };
 
   const handleImageClick = (image) => {
-    setSelectedImage(image);
-    setModalOpen(true);
+    batchUpdateState({
+      selectedImage: image,
+      modalOpen: true
+    });
   };
 
   const handleCloseModal = () => {
-    setModalOpen(false);
-    setSelectedImage(null);
+    batchUpdateState({
+      modalOpen: false,
+      selectedImage: null
+    });
   };
 
   if (!imageUrls.length) {
@@ -259,8 +337,12 @@ const ImageDisplay = ({ imageUrls = [] }) => {
               <Box 
                 sx={{ 
                   position: 'relative', 
-                  pt: '75%',
-                  backgroundColor: 'grey.100'
+                  pt: imageDimensions[image.id]?.aspectRatio 
+                    ? `${(1 / imageDimensions[image.id].aspectRatio) * 100}%` 
+                    : '75%',
+                  backgroundColor: 'grey.100',
+                  transition: 'padding-top 0.3s ease-in-out',
+                  minHeight: '150px' // Ensure minimum height for layout stability
                 }}
               >
                 {imageErrors[image.id] ? (
@@ -385,7 +467,9 @@ const ImageDisplay = ({ imageUrls = [] }) => {
             } else {
               newIndex = currentIndex === images.length - 1 ? 0 : currentIndex + 1;
             }
-            setSelectedImage(images[newIndex]);
+            batchUpdateState({
+              selectedImage: images[newIndex]
+            });
           }
         }}
       >
@@ -492,7 +576,9 @@ const ImageDisplay = ({ imageUrls = [] }) => {
                       e.stopPropagation();
                       const currentIndex = images.findIndex(img => img.id === selectedImage.id);
                       if (currentIndex > 0) {
-                        setSelectedImage(images[currentIndex - 1]);
+                        batchUpdateState({
+                          selectedImage: images[currentIndex - 1]
+                        });
                       }
                     }}
                     disabled={images.findIndex(img => img.id === selectedImage.id) === 0}
@@ -514,7 +600,9 @@ const ImageDisplay = ({ imageUrls = [] }) => {
                       e.stopPropagation();
                       const currentIndex = images.findIndex(img => img.id === selectedImage.id);
                       if (currentIndex < images.length - 1) {
-                        setSelectedImage(images[currentIndex + 1]);
+                        batchUpdateState({
+                          selectedImage: images[currentIndex + 1]
+                        });
                       }
                     }}
                     disabled={images.findIndex(img => img.id === selectedImage.id) === images.length - 1}

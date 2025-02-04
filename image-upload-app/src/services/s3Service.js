@@ -1,6 +1,10 @@
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import ENV_CONFIG, { getEnvVar } from '../config/environment';
 
+// Cache configuration
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
+const MAX_CACHE_SIZE = 100; // Maximum number of items in cache
+
 /**
  * Validates S3 bucket name according to AWS naming rules
  * @param {string} bucketName - The bucket name to validate
@@ -65,6 +69,8 @@ class S3Service {
       },
     });
     this.bucketName = getEnvVar('bucketName', ENV_CONFIG.aws.bucketName);
+    this.imageCache = new Map();
+    this.cacheQueue = []; // For implementing LRU cache eviction
   }
 
   /**
@@ -109,8 +115,21 @@ class S3Service {
    * @returns {Promise<Blob>} - The file data
    * @throws {Error} - If retrieval fails
    */
+  /**
+   * Get an image from cache or S3
+   * @param {string} fileName - The name of the file to retrieve
+   * @returns {Promise<Blob>} - The file data
+   * @throws {Error} - If retrieval fails
+   */
   async getImage(fileName) {
     try {
+      // Check cache first
+      const cachedImage = this.getCachedImage(fileName);
+      if (cachedImage) {
+        return cachedImage;
+      }
+
+      // If not in cache, fetch from S3
       const command = new GetObjectCommand({
         Bucket: this.bucketName,
         Key: fileName,
@@ -118,10 +137,90 @@ class S3Service {
 
       const response = await this.s3Client.send(command);
       const arrayBuffer = await response.Body.transformToByteArray();
-      return new Blob([arrayBuffer], { type: response.ContentType });
+      const blob = new Blob([arrayBuffer], { type: response.ContentType });
+      
+      // Cache the fetched image
+      this.cacheImage(fileName, blob);
+      
+      return blob;
     } catch (error) {
       console.error('Error retrieving file:', error);
       throw new Error(`Error: Failed to retrieve image - ${error.message || 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Get an image from the cache if it exists and is not expired
+   * @private
+   * @param {string} fileName - The name of the file to retrieve from cache
+   * @returns {Blob|null} - The cached image or null if not found/expired
+   */
+  getCachedImage(fileName) {
+    try {
+      const cacheEntry = this.imageCache.get(fileName);
+      if (!cacheEntry) {
+        return null;
+      }
+
+      const { blob, timestamp } = cacheEntry;
+      const now = Date.now();
+
+      // Check if cache entry has expired
+      if (now - timestamp > CACHE_TTL) {
+        this.imageCache.delete(fileName);
+        this.cacheQueue = this.cacheQueue.filter(key => key !== fileName);
+        return null;
+      }
+
+      // Move the accessed item to the end of the queue (most recently used)
+      this.cacheQueue = this.cacheQueue.filter(key => key !== fileName);
+      this.cacheQueue.push(fileName);
+
+      return blob;
+    } catch (error) {
+      console.warn('Cache retrieval error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Cache an image with timestamp
+   * @private
+   * @param {string} fileName - The name of the file to cache
+   * @param {Blob} blob - The image data to cache
+   */
+  cacheImage(fileName, blob) {
+    try {
+      // Implement cache eviction if cache is full
+      while (this.imageCache.size >= MAX_CACHE_SIZE) {
+        const oldestKey = this.cacheQueue.shift();
+        if (oldestKey) {
+          this.imageCache.delete(oldestKey);
+        }
+      }
+
+      // Add new entry to cache
+      this.imageCache.set(fileName, {
+        blob,
+        timestamp: Date.now()
+      });
+      this.cacheQueue.push(fileName);
+    } catch (error) {
+      console.warn('Cache storage error:', error);
+    }
+  }
+
+  /**
+   * Clear the entire image cache
+   * @public
+   */
+  clearCache() {
+    try {
+      this.imageCache.clear();
+      this.cacheQueue = [];
+    } catch (error) {
+      console.error('Error clearing cache:', error);
+      throw new Error('Failed to clear image cache');
     }
   }
 }
