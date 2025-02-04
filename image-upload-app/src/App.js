@@ -21,7 +21,12 @@ function App() {
   }, [])
 
   const handleUploadSuccess = useCallback((urls) => {
-    setUploadedImages(prevUrls => [...prevUrls, ...urls]);
+    setUploadedImages((prevUrls) => {
+      if(prevUrls){    
+      return [...prevUrls, ...urls]
+    }
+      return [...urls]
+    })
     setError(null);
     setSuccess('Upload successful');
     setIsLoading(false);
