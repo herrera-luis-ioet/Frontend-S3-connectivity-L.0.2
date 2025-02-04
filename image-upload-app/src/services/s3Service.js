@@ -1,4 +1,54 @@
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import ENV_CONFIG, { getEnvVar } from '../config/environment';
+
+/**
+ * Validates S3 bucket name according to AWS naming rules
+ * @param {string} bucketName - The bucket name to validate
+ * @throws {Error} If bucket name is invalid
+ */
+const validateBucketName = (bucketName) => {
+  if (!bucketName) {
+    throw new Error('Bucket name cannot be empty');
+  }
+
+  if (bucketName.length < 3 || bucketName.length > 63) {
+    throw new Error('Bucket name must be between 3 and 63 characters long');
+  }
+
+  // AWS S3 bucket naming rules
+  const validBucketNameRegex = /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/;
+  if (!validBucketNameRegex.test(bucketName)) {
+    throw new Error(
+      'Invalid bucket name format. Bucket names must:\n' +
+      '- Contain only lowercase letters, numbers, dots (.), and hyphens (-)\n' +
+      '- Begin and end with a letter or number\n' +
+      '- Not contain consecutive periods\n' +
+      '- Not be formatted as an IP address'
+    );
+  }
+
+  if (bucketName.includes('..')) {
+    throw new Error('Bucket name cannot contain consecutive periods');
+  }
+
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(bucketName)) {
+    throw new Error('Bucket name cannot be formatted as an IP address');
+  }
+};
+
+/**
+ * Validates environment variables and bucket name
+ * @throws {Error} If any required environment variables are missing or invalid
+ */
+const validateEnvironmentVars = () => {
+  const bucketName = getEnvVar('bucketName', ENV_CONFIG.aws.bucketName);
+  validateBucketName(bucketName);
+  
+  // Validate other required variables
+  getEnvVar('region', ENV_CONFIG.aws.region);
+  getEnvVar('accessKeyId', ENV_CONFIG.aws.accessKeyId);
+  getEnvVar('secretAccessKey', ENV_CONFIG.aws.secretAccessKey);
+};
 
 // PUBLIC_INTERFACE
 /**
@@ -8,13 +58,13 @@ class S3Service {
   constructor() {
     this.validateCredentials();
     this.s3Client = new S3Client({
-      region: process.env.REACT_APP_AWS_REGION,
+      region: getEnvVar('region', ENV_CONFIG.aws.region),
       credentials: {
-        accessKeyId: process.env.REACT_APP_AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.REACT_APP_AWS_SECRET_ACCESS_KEY,
+        accessKeyId: getEnvVar('accessKeyId', ENV_CONFIG.aws.accessKeyId),
+        secretAccessKey: getEnvVar('secretAccessKey', ENV_CONFIG.aws.secretAccessKey),
       },
     });
-    this.bucketName = process.env.REACT_APP_S3_BUCKET_NAME;
+    this.bucketName = getEnvVar('bucketName', ENV_CONFIG.aws.bucketName);
   }
 
   /**
@@ -22,20 +72,7 @@ class S3Service {
    * @throws {Error} If any required credentials are missing
    */
   validateCredentials() {
-    const requiredEnvVars = {
-      'REACT_APP_AWS_REGION': process.env.REACT_APP_AWS_REGION,
-      'REACT_APP_AWS_ACCESS_KEY_ID': process.env.REACT_APP_AWS_ACCESS_KEY_ID,
-      'REACT_APP_AWS_SECRET_ACCESS_KEY': process.env.REACT_APP_AWS_SECRET_ACCESS_KEY,
-      'REACT_APP_S3_BUCKET_NAME': process.env.REACT_APP_S3_BUCKET_NAME
-    };
-
-    const missingVars = Object.entries(requiredEnvVars)
-      .filter(([_, value]) => !value)
-      .map(([key]) => key);
-
-    if (missingVars.length > 0) {
-      throw new Error(`Missing required AWS credentials: ${missingVars.join(', ')}. Please check your .env file.`);
-    }
+    validateEnvironmentVars();
   }
 
   /**
@@ -47,10 +84,14 @@ class S3Service {
    */
   async uploadImage(file, fileName) {
     try {
+      // Convert File object to ArrayBuffer for reliable upload
+      const arrayBuffer = await file.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      
       const command = new PutObjectCommand({
         Bucket: this.bucketName,
         Key: fileName,
-        Body: file,
+        Body: uint8Array,
         ContentType: file.type,
       });
 
@@ -58,7 +99,7 @@ class S3Service {
       return `https://${this.bucketName}.s3.${process.env.REACT_APP_AWS_REGION}.amazonaws.com/${fileName}`;
     } catch (error) {
       console.error('Error uploading file:', error);
-      throw new Error(error.message || 'Failed to upload image');
+      throw new Error(`Error: Failed to upload image - ${error.message || 'Unknown error'}`);
     }
   }
 
@@ -80,7 +121,7 @@ class S3Service {
       return new Blob([arrayBuffer], { type: response.ContentType });
     } catch (error) {
       console.error('Error retrieving file:', error);
-      throw new Error(error.message || 'Failed to retrieve image');
+      throw new Error(`Error: Failed to retrieve image - ${error.message || 'Unknown error'}`);
     }
   }
 }

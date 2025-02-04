@@ -11,11 +11,13 @@ import ImageDisplay from './components/ImageDisplay/ImageDisplay';
 function App() {
   const [uploadedImages, setUploadedImages] = useState([]);
   const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleUploadSuccess = useCallback((urls) => {
     setUploadedImages(prevUrls => [...prevUrls, ...urls]);
     setError(null);
+    setSuccess('Upload successful');
     setIsLoading(false);
   }, []);
 
@@ -77,6 +79,21 @@ function App() {
             sx={{ width: '100%' }}
           >
             {error}
+          </Alert>
+        </Snackbar>
+        <Snackbar
+          open={!!success}
+          autoHideDuration={3000}
+          onClose={() => setSuccess(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+          <Alert 
+            severity="success" 
+            onClose={() => setSuccess(null)}
+            variant="filled"
+            sx={{ width: '100%' }}
+          >
+            {success}
           </Alert>
         </Snackbar>
       </Container>

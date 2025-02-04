@@ -3,9 +3,32 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import '@testing-library/jest-dom';
 import ImageDisplay from '../ImageDisplay';
 import s3Service from '../../../services/s3Service';
+import ENV_CONFIG, { getEnvVar } from '../../../config/environment';
 
-// Mock s3Service
+// Mock s3Service and environment config
 jest.mock('../../../services/s3Service');
+jest.mock('../../../config/environment');
+
+// Mock environment values
+const mockEnvValues = {
+  region: 'us-east-1',
+  accessKeyId: 'test-key',
+  secretAccessKey: 'test-secret',
+  bucketName: 'test-image-upload-bucket'
+};
+
+// Setup environment configuration mock
+beforeAll(() => {
+  getEnvVar.mockImplementation((key, config) => {
+    const envMap = {
+      [ENV_CONFIG.aws.region.key]: mockEnvValues.region,
+      [ENV_CONFIG.aws.accessKeyId.key]: mockEnvValues.accessKeyId,
+      [ENV_CONFIG.aws.secretAccessKey.key]: mockEnvValues.secretAccessKey,
+      [ENV_CONFIG.aws.bucketName.key]: mockEnvValues.bucketName
+    };
+    return envMap[config.key];
+  });
+});
 
 // Mock URL.createObjectURL and URL.revokeObjectURL
 const mockObjectUrl = 'blob:http://localhost/mock-url';

@@ -1,51 +1,84 @@
 import React, { useState, useCallback } from 'react';
 import PropTypes from 'prop-types';
-import { Box, Button, CircularProgress, Typography, LinearProgress } from '@mui/material';
+import { Box, Button, CircularProgress, Typography, LinearProgress, Alert, Fade, Backdrop } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import ImageIcon from '@mui/icons-material/Image';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 import s3Service from '../../services/s3Service';
+
+// Define ERROR_TYPES as a constant
+export const ERROR_TYPES = {
+  INVALID_TYPE: 'INVALID_TYPE',
+  SIZE_EXCEEDED: 'SIZE_EXCEEDED',
+  NO_VALID_FILES: 'NO_VALID_FILES'
+};
 
 // PUBLIC_INTERFACE
 /**
  * Image Upload component with drag and drop functionality
  */
-const ImageUpload = ({ onUploadSuccess, onUploadError, onUploadStart, disabled }) => {
+const ImageUpload = ({ 
+  onUploadSuccess, 
+  onUploadError, 
+  onUploadStart = () => {}, 
+  disabled = false 
+}) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragCounter, setDragCounter] = useState(0);
-  const [, setError] = useState('');
+  const [error, setError] = useState('');
+
+
+  const formatErrorMessage = useCallback((type, fileName) => {
+    const messages = {
+      [ERROR_TYPES.INVALID_TYPE]: `Invalid file type: "${fileName}" is not an image file`,
+      [ERROR_TYPES.SIZE_EXCEEDED]: `File size exceeded: "${fileName}" is too large (max 5MB)`,
+      [ERROR_TYPES.NO_VALID_FILES]: 'No valid files: Please provide at least one valid image file'
+    };
+    return messages[type] || 'An unknown error occurred';
+  }, []);
 
   const validateFile = useCallback((file) => {
     if (!file.type.startsWith('image/')) {
-      throw new Error(`${file.name} is not an image file`);
+      throw new Error(formatErrorMessage(ERROR_TYPES.INVALID_TYPE, file.name));
     }
     if (file.size > 5 * 1024 * 1024) { // 5MB limit
-      throw new Error(`${file.name} is too large (max 5MB)`);
+      throw new Error(formatErrorMessage(ERROR_TYPES.SIZE_EXCEEDED, file.name));
     }
     return true;
-  }, []);
+  }, [formatErrorMessage]);
 
-  const handleFiles = useCallback(async (files) => {
-    if (files.length === 0 || disabled) return;
+  const handleFiles = useCallback(async (fileList) => {
+    if (fileList.length === 0 || disabled) return;
 
     setIsLoading(true);
     setUploadProgress(0);
     onUploadStart();
 
     try {
-      const validFiles = files.filter(file => {
-        try {
-          return validateFile(file);
-        } catch (error) {
-          setError(error.message);
-          onUploadError(error.message);
-          return false;
-        }
-      });
+      const files = Array.from(fileList);
+      const validFiles = [];
+      const errors = [];
 
-      if (validFiles.length === 0) {
-        throw new Error('No valid files to upload');
+      for (const file of files) {
+        try {
+          if (validateFile(file)) {
+            validFiles.push(file);
+          }
+        } catch (error) {
+          errors.push(error.message);
+        }
+      }
+
+      if (errors.length > 0) {
+        const errorMessage = errors.join('\n');
+        setError(errorMessage);
+        onUploadError(errorMessage);
+        if (validFiles.length === 0) {
+          throw new Error(formatErrorMessage(ERROR_TYPES.NO_VALID_FILES));
+        }
       }
 
       const uploadPromises = validFiles.map(async (file) => {
@@ -111,29 +144,40 @@ const ImageUpload = ({ onUploadSuccess, onUploadError, onUploadStart, disabled }
 
   return (
     <Box
+      data-testid="upload-area"
       role="region"
       aria-label="Image upload area"
       tabIndex={0}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Space') {
           e.preventDefault();
           document.getElementById('file-input').click();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.currentTarget.blur();
+        } else if (e.key === 'Tab' && !e.shiftKey) {
+          e.preventDefault();
+          const closeButton = document.querySelector('.MuiAlert-action button');
+          if (closeButton && error) {
+            closeButton.focus();
+          }
         }
       }}
+      onFocus={() => setError('')}
       sx={{
         border: 3,
         borderRadius: 2,
         borderColor: isDragging ? 'primary.main' : disabled ? 'grey.200' : 'grey.300',
         borderStyle: 'dashed',
-        p: { xs: 2, sm: 3, md: 4 },
+        p: { xs: 2, sm: 3, md: 4, lg: 5 },
         textAlign: 'center',
         backgroundColor: isDragging ? 'rgba(25, 118, 210, 0.12)' : disabled ? 'grey.100' : 'background.paper',
         cursor: disabled ? 'not-allowed' : 'pointer',
         transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-        transform: isDragging ? 'scale(1.02)' : 'scale(1)',
+        transform: isDragging ? 'scale(1.02)' : 'scale(1.0)',
         boxShadow: isDragging ? '0 0 20px rgba(25, 118, 210, 0.4)' : 'none',
         position: 'relative',
-        minHeight: { xs: '200px', sm: '250px', md: '300px' },
+        minHeight: { xs: '180px', sm: '220px', md: '280px', lg: '320px' },
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -161,21 +205,97 @@ const ImageUpload = ({ onUploadSuccess, onUploadError, onUploadStart, disabled }
       <input
         type="file"
         id="file-input"
+        data-testid="file-input"
         accept="image/*"
         multiple
         style={{ display: 'none' }}
         onChange={handleFileInput}
         aria-label="Choose image files to upload"
       />
+      <Box 
+        role="alert"
+        aria-live="assertive"
+        aria-atomic="true"
+        aria-label="Upload error notification"
+        sx={{
+          position: 'absolute',
+          top: { xs: 8, sm: 12, md: 16, lg: 20 },
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: '100%',
+          maxWidth: { xs: '92%', sm: '88%', md: '84%', lg: '80%' },
+          zIndex: 3,
+        }}
+      >
+        <Fade 
+          in={!!error}
+          timeout={{
+            enter: 400,
+            exit: 300
+          }}
+          unmountOnExit
+        >
+          <Alert 
+            severity="error"
+            icon={<ErrorOutlineIcon fontSize="large" />}
+            onClose={() => setError('')}
+            sx={{
+              width: '100%',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.15)',
+              border: '1px solid #d32f2f',
+              borderRadius: '8px',
+              backgroundColor: 'rgba(211, 47, 47, 0.05)',
+              '& .MuiAlert-icon': {
+                fontSize: '2.5rem',
+                color: '#d32f2f',
+                alignItems: 'center'
+              },
+              '& .MuiAlert-message': {
+                fontSize: '1rem',
+                fontWeight: 500,
+                padding: '8px 0'
+              },
+              '& .MuiAlert-action': {
+                paddingTop: '8px',
+                alignItems: 'center'
+              },
+              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+            }}
+          >
+            <Box 
+              component="pre" 
+              sx={{ 
+                margin: 0, 
+                whiteSpace: 'pre-line', 
+                fontFamily: 'inherit',
+                '& ::selection': {
+                  backgroundColor: 'rgba(211, 47, 47, 0.15)'
+                }
+              }}
+            >
+              {error}
+            </Box>
+          </Alert>
+        </Fade>
+      </Box>
+      <Backdrop
+        open={isLoading}
+        sx={{
+          position: 'absolute',
+          zIndex: 1,
+          backgroundColor: 'rgba(255, 255, 255, 0.8)',
+          backdropFilter: 'blur(4px)',
+        }}
+      />
       {isLoading ? (
-        <Box sx={{ width: '100%', textAlign: 'center' }}>
+        <Box sx={{ width: '100%', textAlign: 'center', position: 'relative', zIndex: 2 }}>
           <Box sx={{ position: 'relative', mb: 3 }}>
             <CircularProgress 
-              size={60}
-              thickness={4}
+              size={70}
+              thickness={4.5}
               sx={{ 
                 color: 'primary.main',
-                animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                animation: 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
                 '@keyframes pulse': {
                   '0%, 100%': {
                     opacity: 1,
@@ -188,8 +308,8 @@ const ImageUpload = ({ onUploadSuccess, onUploadError, onUploadStart, disabled }
               aria-label="Upload in progress"
             />
             <CircularProgress 
-              size={60}
-              thickness={4}
+              size={70}
+              thickness={4.5}
               sx={{ 
                 position: 'absolute',
                 left: 0,
@@ -213,7 +333,8 @@ const ImageUpload = ({ onUploadSuccess, onUploadError, onUploadStart, disabled }
                 backgroundColor: 'rgba(25, 118, 210, 0.12)',
                 '& .MuiLinearProgress-bar': {
                   borderRadius: 4,
-                  transition: 'transform 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+                  transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  backgroundImage: 'linear-gradient(90deg, #1976d2, #42a5f5)',
                 },
                 '&::before': {
                   content: '""',
@@ -244,15 +365,34 @@ const ImageUpload = ({ onUploadSuccess, onUploadError, onUploadStart, disabled }
               {Math.round(uploadProgress)}%
             </Typography>
           </Box>
-          <Typography 
-            variant="body1" 
-            color="primary" 
-            sx={{ fontWeight: 500 }}
+          <Box 
+            sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}
             role="status"
             aria-live="polite"
           >
-            Uploading your images...
-          </Typography>
+            <Typography 
+              variant="body1" 
+              color="primary" 
+              component="div"
+              sx={{ fontWeight: 500 }}
+            >
+              Uploading your images
+              <Box 
+                component="span" 
+                sx={{ 
+                  display: 'inline-block',
+                  marginLeft: 1,
+                  animation: 'ellipsis 1.4s infinite',
+                  '@keyframes ellipsis': {
+                    '0%': { content: "''" },
+                    '33%': { content: "'.''" },
+                    '66%': { content: "'..''" },
+                    '100%': { content: "'...'" }
+                  }
+                }} 
+              />
+            </Typography>
+          </Box>
         </Box>
       ) : (
         <>
@@ -260,30 +400,47 @@ const ImageUpload = ({ onUploadSuccess, onUploadError, onUploadStart, disabled }
             <ImageIcon sx={{ fontSize: 64, color: 'primary.main', mb: 2 }} />
           ) : (
             <CloudUploadIcon sx={{ 
-              fontSize: { xs: 48, sm: 64, md: 72 }, 
+              fontSize: { xs: 40, sm: 56, md: 64, lg: 72 }, 
               color: 'primary.main', 
               mb: { xs: 1, sm: 2 } 
             }} />
           )}
-          <Typography 
-            variant="h6" 
-            gutterBottom
-            sx={{
-              fontSize: { xs: '1.1rem', sm: '1.25rem', md: '1.5rem' }
-            }}
-          >
-            {isDragging ? 'Drop images here' : 'Drag and drop images here'}
-          </Typography>
-          <Typography variant="body2" color="textSecondary" gutterBottom>
-            or click to select files
-          </Typography>
-          <Typography variant="caption" color="textSecondary" display="block" sx={{ mb: 2 }}>
-            Supports: JPG, PNG, GIF (max 5MB per file)
-          </Typography>
+          <Box sx={{ mb: 2 }}>
+            <Typography 
+              variant="h6" 
+              component="div"
+              sx={{
+                fontSize: { xs: '1rem', sm: '1.15rem', md: '1.35rem', lg: '1.5rem' },
+                mb: 1
+              }}
+            >
+              {isDragging ? 'Drop images here' : 'Drag and drop images here'}
+            </Typography>
+            <Typography 
+              variant="body2" 
+              color="textSecondary" 
+              component="div"
+              sx={{ mb: 1 }}
+            >
+              or click to select files
+            </Typography>
+            <Typography 
+              variant="caption" 
+              color="textSecondary" 
+              component="div"
+            >
+              Supports: JPG, PNG, GIF (max 5MB per file)
+            </Typography>
+          </Box>
           <Button
             variant="contained"
             component="span"
-            sx={{ mt: 2 }}
+            sx={{ 
+              mt: { xs: 1.5, sm: 2, md: 2.5 },
+              px: { xs: 2, sm: 3, md: 4 },
+              py: { xs: 1, sm: 1.25, md: 1.5 },
+              fontSize: { xs: '0.875rem', sm: '0.9375rem', md: '1rem' }
+            }}
             onClick={(e) => e.stopPropagation()}
             aria-label="Select images to upload"
           >
@@ -300,11 +457,6 @@ ImageUpload.propTypes = {
   onUploadError: PropTypes.func.isRequired,
   onUploadStart: PropTypes.func,
   disabled: PropTypes.bool,
-};
-
-ImageUpload.defaultProps = {
-  onUploadStart: () => {},
-  disabled: false,
 };
 
 export default ImageUpload;
