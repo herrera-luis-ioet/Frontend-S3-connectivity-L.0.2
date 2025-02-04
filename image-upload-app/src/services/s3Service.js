@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import ENV_CONFIG, { getEnvVar } from '../config/environment';
 
 // Cache configuration
@@ -222,6 +222,22 @@ class S3Service {
       console.error('Error clearing cache:', error);
       throw new Error('Failed to clear image cache');
     }
+  }
+  async listImages() {
+    const bucketName = this.bucketName;
+    const command = new ListObjectsV2Command({ Bucket: bucketName });
+  
+    try {
+      const { Contents } = await this.s3Client.send(command);
+      const imageFiles = Contents?.filter(obj =>
+        obj.Key.match(/\.(jpg|jpeg|png|gif|webp)$/i)
+      ).map(obj => `https://${bucketName}.s3.amazonaws.com/${obj.Key}`);
+  
+      return imageFiles
+    } catch (err) {
+      console.error("Error listing objects:", err);
+    }
+  
   }
 }
 

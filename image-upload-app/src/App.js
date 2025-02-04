@@ -1,8 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Container, Box, Alert, Snackbar, Typography, CircularProgress } from '@mui/material';
 import './App.css';
 import ImageUpload from './components/ImageUpload/ImageUpload';
 import ImageDisplay from './components/ImageDisplay/ImageDisplay';
+import s3Service from './services/s3Service';
 
 // PUBLIC_INTERFACE
 /**
@@ -13,6 +14,11 @@ function App() {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  
+  useEffect(()=>{
+    const fetchData=async ()=>{setUploadedImages(await s3Service.listImages())}
+    fetchData()
+  }, [])
 
   const handleUploadSuccess = useCallback((urls) => {
     setUploadedImages(prevUrls => [...prevUrls, ...urls]);
